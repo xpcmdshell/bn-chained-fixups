@@ -158,10 +158,9 @@ def apply_fixups(bv: BinaryView):
 
                 # handle symbol binding
                 if bind == 1:
-                    # Offset is an entry in the imports table
-                    # The import entry is a DYLD_CHAINED_IMPORT
-                    # The low 23 bits contain the offset into the symbol table
-                    # to lookup (DYLD_CHAINED_IMPORT.name_offset)
+                    # In the binding case, `offset` is an entry in the imports table
+                    # The import entry is a DYLD_CHAINED_IMPORT. The low 23 bits contain
+                    # the offset into the symbol table to lookup (DYLD_CHAINED_IMPORT.name_offset)
                     import_entry = read32(imports_addr + offset * 4, bv)
                     sym_name_offset = import_entry >> 9
                     sym_name_addr = syms_addr + sym_name_offset
