@@ -53,7 +53,8 @@ def setup_types(bv: BinaryView):
 # Locate the start of the fixup metadata (a DYLD_CHAINED_FIXUPS_HEADER struct)
 def get_fixups_addr(bv: BinaryView):
     macho_hdr = bv.typed_data_accessor(bv.start, bv.types["mach_header_64"])
-    # Currently only supports kext bundles, kernel may require other fixes? untested
+    # Currently only supports kext bundles. Kernel image fixups may require other steps,
+    # doesn't seem to work there.
     if macho_hdr["filetype"].value != MH_KEXT_BUNDLE:
         return None
     fixup_hdr_addr = None
