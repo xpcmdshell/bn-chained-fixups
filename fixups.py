@@ -55,7 +55,6 @@ def get_fixups_addr(bv: BinaryView):
     macho_hdr = bv.typed_data_accessor(bv.start, bv.types["mach_header_64"])
     # Currently only supports kext bundles, kernel may require other fixes? untested
     if macho_hdr["filetype"].value != MH_KEXT_BUNDLE:
-        print("blah")
         return None
     fixup_hdr_addr = None
     load_command_offset = bv.types["mach_header_64"].width
