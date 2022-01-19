@@ -154,7 +154,6 @@ def apply_fixups(bv: BinaryView):
                 offset = content & 0xFFFFFFFF
                 nxt = (content >> 51) & 2047
                 bind = (content >> 62) & 1
-                tag = (content >> 32) & 0xFFFF
 
                 # handle symbol binding
                 if bind == 1:
