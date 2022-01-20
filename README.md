@@ -1,5 +1,5 @@
 # bn-chained-fixups
-This Binary Ninja plugin adds a command to apply the fixup information present in `LC_DYLD_CHAINED_FIXUPS` for M1 Kernel extensions. Currently doesn't support other fixup types (kernel). Information about where fixups were applied is available in the Log console. 
+This Binary Ninja plugin adds a command to apply the fixup information present in `LC_DYLD_CHAINED_FIXUPS` for M1 Kernel extensions. Information about where fixups were applied is available in the `Log` console. 
 
 As of macOS 12/iOS 15, a new load command (`LC_DYLD_CHAINED_FIXUPS`) is used to store the linker data that dyld uses at process startup. For more information, there's a blog post by Emerge Tools [here](https://www.emergetools.com/blog/posts/iOS15LaunchTime) that explains it at a high level. 
 
@@ -24,6 +24,8 @@ To apply fixups for eligible kexts, use the plugin action under `Tools -> Plugin
 [*] Chain start at 0x1d000
 [*] Binding __ZN9IOService20getDeviceMemoryCountEv at 0x1d000
 [*] Binding __ZN9IOService24getDeviceMemoryWithIndexEj at 0x1d008
+
+...
 
 [ SNIP ]
 ```
