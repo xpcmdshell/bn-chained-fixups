@@ -6,7 +6,7 @@ As of macOS 12/iOS 15, a new load command (`LC_DYLD_CHAINED_FIXUPS`) is used to 
 In short, there is a list of start locations of pointer chains for each segment. Each chain entry contains information about whether it needs to be rebased or bound, the information to do so (target or ordinal number), as well as the location of the next entry in the chain. DYLD will traverse each of these chains and apply the necessary fixups. 
 
 # Usage 
-To apply fixups for eligible kexts, use the plugin action under `Tools -> Plugins -> Apply LC_DYLD_CHAINED_FIXUPS`.
+To apply fixups for eligible projects, use the plugin action under `Tools -> Plugins -> Apply LC_DYLD_CHAINED_FIXUPS`.
 
 ### Sample Output
 ```
