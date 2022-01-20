@@ -7,6 +7,11 @@ import struct
 LC_REQ_DYLD = 0x80000000
 LC_DYLD_CHAINED_FIXUPS = LC_REQ_DYLD | 0x34
 MH_KEXT_BUNDLE = 0x0000000B
+MH_EXECUTE = 0x00000002
+FAT_MAGIC = 0xBEBAFECA
+MH_MAGIC_64 = 0xFEEDFACF
+CPU_TYPE_ARM64 = 0x0100000C
+
 
 # Read a 32 bit integer at the specified address
 def read32(addr: int, bv: BinaryView):
@@ -18,12 +23,22 @@ def read64(addr: int, bv: BinaryView):
     return int.from_bytes(bv.read(addr, 8), "little")
 
 
+# Read a 32 bit integer at the specified address (big endian)
+def read32_be(addr: int, bv: BinaryView):
+    return int.from_bytes(bv.read(addr, 4), "big")
+
+
+# Read a 64 bit integer at the specified address (big endian)
+def read64_be(addr: int, bv: BinaryView):
+    return int.from_bytes(bv.read(addr, 8), "big")
+
+
 # Quick check to see if the bv contains an LC_DYLD_CHAINED_FIXUPS
 # load command.
 def contains_dyld_fixups(bv: BinaryView):
     if bv.arch != Architecture["aarch64"]:
         return False
-    fixups_addr = get_fixups_addr(bv)
+    fixups_addr, _ = get_fixups_addr(bv)
     if fixups_addr is None:
         return False
     return True
@@ -50,28 +65,66 @@ def setup_types(bv: BinaryView):
         bv.define_user_type(name, typs.types[name])
 
 
+def is_macho(bv: BinaryView):
+    return bv.view_type == "Mach-O"
+
+
+# Get the start offset of the
+def get_arm_slice_start(bv: BinaryView):
+    magic = read32(bv.start, bv.file.raw)
+    if magic == MH_MAGIC_64:
+        # aarch64 is the only slice type
+        return bv.start
+    elif magic == FAT_MAGIC:
+        n_slices = read32_be(bv.start + 4, bv.file.raw)
+        for i in range(n_slices):
+            # 20 = sizeof(fat_arch)
+            # 8 = sizeof(fat_hdr)
+            fat_arch_data = bv.read(bv.start + 8 + (i * 20), 20)
+            fat_arch = struct.unpack(">IIIII", fat_arch_data)
+            # fat_arch.cputype
+            if fat_arch[0] == CPU_TYPE_ARM64:
+                # fat_arch.offset
+                return bv.start + fat_arch[2]
+        return None
+    else:
+        return None
+
+
 # Locate the start of the fixup metadata (a DYLD_CHAINED_FIXUPS_HEADER struct)
 def get_fixups_addr(bv: BinaryView):
-    macho_hdr = bv.typed_data_accessor(bv.start, bv.types["mach_header_64"])
-    # Currently only supports kext bundles. Kernel image fixups may require other steps,
-    # doesn't seem to work there.
-    if macho_hdr["filetype"].value != MH_KEXT_BUNDLE:
-        return None
+    if not is_macho(bv):
+        return (None, None)
+    read_src = bv.file.raw
+    arm_slice_start = get_arm_slice_start(bv.file.raw)
+    if arm_slice_start is None:
+        return (None, None)
+    macho_hdr_data = read_src.read(arm_slice_start, 32)
+    macho_hdr = struct.unpack("<IIIIIIII", macho_hdr_data)
     fixup_hdr_addr = None
-    load_command_offset = bv.types["mach_header_64"].width
-    for _ in range(macho_hdr["ncmds"].value):
-        lc = bv.typed_data_accessor(
-            bv.start + load_command_offset, bv.types["load_command"]
-        )
-        if lc["cmd"].value == LC_DYLD_CHAINED_FIXUPS:
-            lc_fixup = bv.typed_data_accessor(
-                bv.start + load_command_offset, bv.types["linkedit_data"]
-            )
-            fixup_hdr_addr = bv.start + lc_fixup["dataoff"].value
-            break
-        load_command_offset += lc["cmdsize"].value
 
-    return fixup_hdr_addr
+    # sizeof(mach_header_64)
+    load_command_offset = 32
+
+    # mach_header_64.ncmds
+    for _ in range(macho_hdr[4]):
+        lc_hdr_data = read_src.read(arm_slice_start + load_command_offset, 8)
+        lc = struct.unpack("<II", lc_hdr_data)
+        # load_command.cmd
+        if lc[0] == LC_DYLD_CHAINED_FIXUPS:
+            lc_fixup = bv.typed_data_accessor(
+                arm_slice_start + load_command_offset, bv.types["linkedit_data"]
+            )
+            # linkedit_data
+            lc_fixup_data = read_src.read(arm_slice_start + load_command_offset, 16)
+            lc_fixup = struct.unpack("<IIII", lc_fixup_data)
+
+            # linkedit_data.dataoff
+            fixup_hdr_addr = arm_slice_start + lc_fixup[2]
+            break
+        # load_command.cmdsize
+        load_command_offset += lc[1]
+    return (fixup_hdr_addr, read_src)
 
 
 # Apply fixups from LC_DYLD_CHAINED_FIXUPS to the current bv
@@ -82,20 +135,20 @@ def apply_fixups(bv: BinaryView):
     except Exception:
         pass
     # Get the location of the start of the fixups metadata
-    fixup_hdr_addr = get_fixups_addr(bv)
+    fixup_hdr_addr, read_src = get_fixups_addr(bv)
     if fixup_hdr_addr is None:
         print("[-] Does not contain LC_DYLD_CHAINED_FIXUPS")
         return
 
     print(f"[*] Fixup header at = {hex(fixup_hdr_addr)} ")
-    fixup_hdr = bv.typed_data_accessor(
+    fixup_hdr = read_src.typed_data_accessor(
         fixup_hdr_addr, bv.types["dyld_chained_fixups_header"]
     )
 
     segs_addr = fixup_hdr_addr + fixup_hdr["starts_offset"].value
 
     # peek the segs count
-    seg_count = read32(segs_addr, bv)
+    seg_count = read32(segs_addr, read_src)
     print(
         f"[*] DYLD_CHAINED_STARTS_IN_IMAGE at = {hex(segs_addr)}, with {hex(seg_count)} segments"
     )
@@ -112,20 +165,19 @@ def apply_fixups(bv: BinaryView):
     # We wanna read in the the array of offsets from the seg_info_offset
     # field of dyld_chained_starts_in_image
     for i in range(seg_count):
-        s = read32((i * 4) + segs_addr + 4, bv)  # read
+        s = read32((i * 4) + segs_addr + 4, read_src)  # read
         segs.append(s)
 
     for i in range(seg_count):
         # No fixups in this segment, skip
         if segs[i] == 0:
             continue
-
         starts_addr = (
             segs_addr + segs[i]
         )  # follow the current segment offset from the start of the segments list
 
         # read the current dyld_chained_starts_in_segment bytes
-        starts_in_segment_data = bv.read(starts_addr, 24)
+        starts_in_segment_data = read_src.read(starts_addr, 24)
 
         # unpack those bytes into a nice list of fields
         starts_in_segment = struct.unpack("<IHHQIHH", starts_in_segment_data)
@@ -134,9 +186,10 @@ def apply_fixups(bv: BinaryView):
         page_count = starts_in_segment[5]
         page_size = starts_in_segment[1]
         segment_offset = starts_in_segment[3]
+        pointer_type = starts_in_segment[2]
 
         # read the array of page_starts from dyld_chained_starts_in_segment
-        page_starts_data = bv.read(starts_addr + 22, page_count * 2)
+        page_starts_data = read_src.read(starts_addr + 22, page_count * 2)
         page_starts = struct.unpack("<" + ("H" * page_count), page_starts_data)
 
         # handle each page start
@@ -145,6 +198,8 @@ def apply_fixups(bv: BinaryView):
             if start == 0xFFFF:
                 continue
 
+            # We stop reading from the raw view and start using the main binaryview since the
+            # segment addresses we got from the load commands will match up now
             chain_entry_addr = bv.start + segment_offset + (j * page_size) + start
             print(f"[*] Chain start at {hex(chain_entry_addr)}")
 
@@ -160,12 +215,12 @@ def apply_fixups(bv: BinaryView):
                     # In the binding case, `offset` is an entry in the imports table
                     # The import entry is a DYLD_CHAINED_IMPORT. The low 23 bits contain
                     # the offset into the symbol table to lookup (DYLD_CHAINED_IMPORT.name_offset)
-                    import_entry = read32(imports_addr + offset * 4, bv)
+                    import_entry = read32(imports_addr + offset * 4, bv.file.raw)
                     sym_name_offset = import_entry >> 9
                     sym_name_addr = syms_addr + sym_name_offset
 
                     # Get the symbol name at the desginated address
-                    sym_name = bv.get_ascii_string_at(
+                    sym_name = bv.file.raw.get_ascii_string_at(
                         sym_name_addr, require_cstring=True
                     )
                     if sym_name is not None:
@@ -178,7 +233,7 @@ def apply_fixups(bv: BinaryView):
                     sym_ref: CoreSymbol = bv.get_symbol_by_raw_name(sym_name)
                     if not sym_ref:
                         print(
-                            f"[-] Could not get reference to symbol named {sym_name} (malformed or bug?)"
+                            f"[-] Could not get reference to symbol named {sym_name}, malformed or bug?"
                         )
                         return
 
