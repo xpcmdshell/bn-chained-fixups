@@ -1,5 +1,5 @@
 # bn-chained-fixups
-This Binary Ninja plugin adds a command to apply the fixup information present in `LC_DYLD_CHAINED_FIXUPS` for eligible ARM Mach-O files (such as M1 Kernel extensions). Information about where fixups were applied is available in the `Log` console. 
+This Binary Ninja plugin adds a command to apply the fixup information present in `LC_DYLD_CHAINED_FIXUPS` for eligible ARM Mach-O files (such as M1 Kernel extensions). This plugin was written against the `dev` branch of Binary Ninja API, and tested against M1 kernel extensions and M1 Kernel images. 
 
 As of macOS 12/iOS 15, a new load command (`LC_DYLD_CHAINED_FIXUPS`) is used to store the linker data that dyld uses at process startup. For more information, there's a blog post by Emerge Tools [here](https://www.emergetools.com/blog/posts/iOS15LaunchTime) that explains it at a high level. 
 
@@ -9,6 +9,8 @@ In short, there is a list of start locations of pointer chains for each segment.
 To apply fixups for eligible projects, use the plugin action under `Tools -> Plugins -> Apply LC_DYLD_CHAINED_FIXUPS`.
 
 ### Sample Output
+Information about where fixups were applied is available in the `Log` console:
+
 ```
 [*] Fixup header at = 0x20000 
 [*] DYLD_CHAINED_STARTS_IN_IMAGE at = 0x20020, with 0x5 segments
