@@ -38,7 +38,7 @@ def read64_be(addr: int, bv: BinaryView):
 def contains_dyld_fixups(bv: BinaryView):
     if bv.arch != Architecture["aarch64"]:
         return False
-    fixups_addr, _ = get_fixups_addr(bv)
+    fixups_addr, _, _ = get_fixups_addr(bv)
     if fixups_addr is None:
         return False
     return True
@@ -124,7 +124,7 @@ def get_fixups_addr(bv: BinaryView):
             break
         # load_command.cmdsize
         load_command_offset += lc[1]
-    return (fixup_hdr_addr, read_src)
+    return (fixup_hdr_addr, read_src, arm_slice_start)
 
 
 # Apply fixups from LC_DYLD_CHAINED_FIXUPS to the current bv
@@ -135,7 +135,7 @@ def apply_fixups(bv: BinaryView):
     except Exception:
         pass
     # Get the location of the start of the fixups metadata
-    fixup_hdr_addr, read_src = get_fixups_addr(bv)
+    fixup_hdr_addr, read_src, arm_slice_start = get_fixups_addr(bv)
     if fixup_hdr_addr is None:
         print("[-] Does not contain LC_DYLD_CHAINED_FIXUPS")
         return
@@ -198,14 +198,15 @@ def apply_fixups(bv: BinaryView):
             if start == 0xFFFF:
                 continue
 
-            # We stop reading from the raw view and start using the main binaryview since the
-            # segment addresses we got from the load commands will match up now
-            chain_entry_addr = bv.start + segment_offset + (j * page_size) + start
+            # The chain entry address is the offset into the raw view
+            chain_entry_addr = (
+                arm_slice_start + segment_offset + (j * page_size) + start
+            )
             print(f"[*] Chain start at {hex(chain_entry_addr)}")
 
             j += 1
             while True:
-                content = read64(chain_entry_addr, bv)
+                content = read64(chain_entry_addr, bv.file.raw)
                 offset = content & 0xFFFFFFFF
                 nxt = (content >> 51) & 2047
                 bind = (content >> 62) & 1
@@ -240,7 +241,7 @@ def apply_fixups(bv: BinaryView):
                     # Replace it with the address of the symbol we just found
                     fixed_bytes = struct.pack("<Q", sym_ref.address)
                     bv.write(
-                        chain_entry_addr,
+                        chain_entry_addr - arm_slice_start,
                         fixed_bytes,
                         except_on_relocation=False,
                     )
@@ -251,7 +252,7 @@ def apply_fixups(bv: BinaryView):
                     target = bv.start + offset
                     fixed_bytes = struct.pack("<Q", target)
                     bv.write(
-                        chain_entry_addr,
+                        chain_entry_addr - arm_slice_start,
                         fixed_bytes,
                         except_on_relocation=False,
                     )
