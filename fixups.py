@@ -11,6 +11,7 @@ MH_EXECUTE = 0x00000002
 FAT_MAGIC = 0xBEBAFECA
 MH_MAGIC_64 = 0xFEEDFACF
 CPU_TYPE_ARM64 = 0x0100000C
+CPU_TYPE_X86_64 = 0x01000007
 
 
 # Read a 32 bit integer at the specified address
@@ -36,8 +37,6 @@ def read64_be(addr: int, bv: BinaryView):
 # Quick check to see if the bv contains an LC_DYLD_CHAINED_FIXUPS
 # load command.
 def contains_dyld_fixups(bv: BinaryView):
-    if bv.arch != Architecture["aarch64"]:
-        return False
     fixups_addr, _, _ = get_fixups_addr(bv)
     if fixups_addr is None:
         return False
@@ -55,7 +54,7 @@ struct dyld_chained_fixups_header
     uint32_t imports_count;
     uint32_t imports_format;
     uint32_t symbols_format;
-}
+};
 """
 
 # Define necessary types
@@ -73,7 +72,8 @@ def is_macho(bv: BinaryView):
 def get_arm_slice_start(bv: BinaryView):
     magic = read32(bv.start, bv.file.raw)
     if magic == MH_MAGIC_64:
-        # aarch64 is the only slice type
+        # mh_arch = read32(bv.start + 4, bv.file.raw)
+        # aarch64 is (not) the only slice type
         return bv.start
     elif magic == FAT_MAGIC:
         n_slices = read32_be(bv.start + 4, bv.file.raw)
@@ -83,7 +83,7 @@ def get_arm_slice_start(bv: BinaryView):
             fat_arch_data = bv.read(bv.start + 8 + (i * 20), 20)
             fat_arch = struct.unpack(">IIIII", fat_arch_data)
             # fat_arch.cputype
-            if fat_arch[0] == CPU_TYPE_ARM64:
+            if fat_arch[0] == CPU_TYPE_ARM64 or fat_arch[0] == CPU_TYPE_X86_64:
                 # fat_arch.offset
                 return bv.start + fat_arch[2]
         return None
@@ -94,11 +94,11 @@ def get_arm_slice_start(bv: BinaryView):
 # Locate the start of the fixup metadata (a DYLD_CHAINED_FIXUPS_HEADER struct)
 def get_fixups_addr(bv: BinaryView):
     if not is_macho(bv):
-        return (None, None)
+        return (None, None, None)
     read_src = bv.file.raw
     arm_slice_start = get_arm_slice_start(bv.file.raw)
     if arm_slice_start is None:
-        return (None, None)
+        return (None, None, None)
     macho_hdr_data = read_src.read(arm_slice_start, 32)
     macho_hdr = struct.unpack("<IIIIIIII", macho_hdr_data)
     fixup_hdr_addr = None
@@ -137,10 +137,10 @@ def apply_fixups(bv: BinaryView):
     # Get the location of the start of the fixups metadata
     fixup_hdr_addr, read_src, arm_slice_start = get_fixups_addr(bv)
     if fixup_hdr_addr is None:
-        print("[-] Does not contain LC_DYLD_CHAINED_FIXUPS")
+        print("[bn-chained-fixups] [-] Does not contain LC_DYLD_CHAINED_FIXUPS")
         return
 
-    print(f"[*] Fixup header at = {hex(fixup_hdr_addr)} ")
+    print(f"[bn-chained-fixups] [*] Fixup header at = {hex(fixup_hdr_addr)} ")
     fixup_hdr = read_src.typed_data_accessor(
         fixup_hdr_addr, bv.types["dyld_chained_fixups_header"]
     )
@@ -150,16 +150,16 @@ def apply_fixups(bv: BinaryView):
     # peek the segs count
     seg_count = read32(segs_addr, read_src)
     print(
-        f"[*] DYLD_CHAINED_STARTS_IN_IMAGE at = {hex(segs_addr)}, with {hex(seg_count)} segments"
+        f"[bn-chained-fixups] [*] DYLD_CHAINED_STARTS_IN_IMAGE at = {hex(segs_addr)}, with {hex(seg_count)} segments"
     )
 
     # start of imports table
     imports_addr = fixup_hdr_addr + fixup_hdr["imports_offset"].value
-    print(f"[*] Imports table at {hex(imports_addr)} ")
+    print(f"[bn-chained-fixups] [*] Imports table at {hex(imports_addr)} ")
 
     # start of symbol table
     syms_addr = fixup_hdr_addr + fixup_hdr["symbols_offset"].value
-    print(f"[*] Symbols table at {hex(syms_addr)}")
+    print(f"[bn-chained-fixups] [*] Symbols table at {hex(syms_addr)}")
 
     segs = []
     # We wanna read in the the array of offsets from the seg_info_offset
@@ -202,7 +202,7 @@ def apply_fixups(bv: BinaryView):
             chain_entry_addr = (
                 arm_slice_start + segment_offset + (j * page_size) + start
             )
-            print(f"[*] Chain start at {hex(chain_entry_addr)}")
+            print(f"[bn-chained-fixups] [*] Chain start at {hex(chain_entry_addr)}")
 
             j += 1
             while True:
@@ -227,14 +227,14 @@ def apply_fixups(bv: BinaryView):
                     if sym_name is not None:
                         sym_name = sym_name.value
                     else:
-                        print("[-] Symbol name not found, malformed or bug?")
+                        print("[bn-chained-fixups] [-] Symbol name not found, malformed or bug?")
                         return
 
-                    print(f"[*] Binding {sym_name} at {hex(chain_entry_addr)}")
+                    print(f"[bn-chained-fixups] [*] Binding {sym_name} at {hex(chain_entry_addr)}")
                     sym_ref: CoreSymbol = bv.get_symbol_by_raw_name(sym_name)
                     if not sym_ref:
                         print(
-                            f"[-] Could not get reference to symbol named {sym_name}, malformed or bug?"
+                            f"[bn-chained-fixups] [-] Could not get reference to symbol named {sym_name}, malformed or bug?"
                         )
                         return
 
@@ -248,7 +248,7 @@ def apply_fixups(bv: BinaryView):
 
                 else:
                     # Nothing to bind
-                    print(f"[*] Rebasing pointer at {hex(chain_entry_addr)}")
+                    print(f"[bn-chained-fixups] [*] Rebasing pointer at {hex(chain_entry_addr)}")
                     target = bv.start + offset
                     fixed_bytes = struct.pack("<Q", target)
                     bv.write(
