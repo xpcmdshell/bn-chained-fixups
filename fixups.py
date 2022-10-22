@@ -55,7 +55,7 @@ struct dyld_chained_fixups_header
     uint32_t imports_count;
     uint32_t imports_format;
     uint32_t symbols_format;
-}
+};
 """
 
 # Define necessary types
